@@ -63,14 +63,31 @@ async def get_summary_from_gemini(api_key, prompt):
         return f"Error: Failed to generate summary. {e}"
 
 def sanitize_markdown_v2(text: str) -> str:
-    """Escapes special characters for Telegram's MarkdownV2 parser."""
+    """
+    Escapes all special characters for Telegram's MarkdownV2 parser.
+    This version is more aggressive to handle complex AI-generated text.
+    """
     if not isinstance(text, str):
         return ""
+    
+    # Characters to escape are: _ * [ ] ( ) ~ ` > # + - = | { } . !
+    # Note: We are now escaping the hyphen `-` everywhere.
     escape_chars = r'_*[]()~`>#+-=|{}.!'
-    # Escape all special characters
+    
+    # First, escape all special characters.
     sanitized_text = re.sub(f'([{re.escape(escape_chars)}])', r'\\\1', text)
-    # Re-process for AI-generated markdown (bolding, etc.)
-    sanitized_text = sanitized_text.replace(r'\#\# ', '*\n').replace(r'\-', '\n-')
+    
+    # Then, intelligently re-format the specific markdown we want to allow.
+    # This part should be done AFTER the main sanitation.
+
+    # Convert "## Category" to bold: *Category*
+    # Use a regex to find ##, capture the text until the next newline.
+    sanitized_text = re.sub(r'\\\#\\\#\s*(.*?)\n', r'*\1*\n', sanitized_text)
+
+    # Convert bullet points that start with "- "
+    # Use a regex for lines starting with a hyphen.
+    sanitized_text = re.sub(r'^\s*\\\-\s', r'• ', sanitized_text, flags=re.MULTILINE)
+
     return sanitized_text
     
 async def send_telegram_message(bot_token, chat_id, message):
