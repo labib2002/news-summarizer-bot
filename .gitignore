@@ -1,0 +1,13 @@
+# Python Virtual Environment
+venv/
+__pycache__/
+
+# Database file (we don't want to commit the news articles)
+*.db
+*.db-journal
+
+# Secret configuration file
+config.ini
+
+# Temporary files
+failed_message.txt
