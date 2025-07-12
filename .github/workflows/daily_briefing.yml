@@ -3,7 +3,7 @@ name: Daily News Briefing
 on:
   workflow_dispatch: # Allows you to run this manually from the Actions tab
   schedule:
-    # Runs every day at 07:00 UTC. Use https://crontab.guru/ to customize.
+    # Runs every day at 07:00 UTC.
     - cron: '0 7 * * *'
 
 jobs:
@@ -24,24 +24,10 @@ jobs:
       - name: Step 1 - Gather News Articles
         run: python gather_news.py
 
-      - name: Step 2 - Summarize, Send Briefing, and Clear DB
+      - name: Step 2 - Summarize and Send Briefing
         env:
-          # Use the secrets we defined in repository settings
-          GITHUB_ACTIONS: 'true' # Lets our script know it's running in the cloud
+          GITHUB_ACTIONS: 'true'
           TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
         run: python summarize_and_send.py
-
-      - name: Step 3 - Commit the cleared database
-        run: |
-          git config --global user.name 'github-actions[bot]'
-          git config --global user.email 'github-actions[bot]@users.noreply.github.com'
-          git add news_articles.db
-          # Check if there are changes before committing
-          if git diff --staged --quiet; then
-            echo "No database changes to commit."
-          else
-            git commit -m "Automated commit: Clear daily news database"
-            git push
-          fi
