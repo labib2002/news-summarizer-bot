@@ -19,7 +19,8 @@ GitHub Actions (daily cron, 07:00 UTC)
 │
 └─ 2. summarize_and_send.py
       • loads all stored articles grouped by category
-      • builds a structured prompt and calls Gemini (gemini-2.5-flash)
+      • builds a structured prompt and calls Gemini (gemini-3.5-flash,
+        falling back to gemini-2.5-flash if the model id is unavailable)
       • sanitizes the result for Telegram MarkdownV2 (with 4096-char
         message splitting)
       • sends the briefing via the Telegram Bot API
@@ -113,4 +114,5 @@ Environment variables take precedence over `config.ini`.
 ## Stack
 
 Python 3.11 · httpx + asyncio · feedparser · SQLite · google-generativeai
-(gemini-2.5-flash) · python-telegram-bot · GitHub Actions cron
+(gemini-3.5-flash → gemini-2.5-flash fallback) · python-telegram-bot ·
+GitHub Actions cron

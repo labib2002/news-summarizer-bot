@@ -2,11 +2,16 @@ import sqlite3
 import configparser
 import logging
 import google.generativeai as genai
+from google.api_core import exceptions as google_exceptions
 import telegram
 import asyncio
 import re
 import os
 from datetime import datetime
+
+# Newest preferred model first; older models as graceful fallbacks in case a
+# model id is not available (yet/anymore) for this API key.
+GEMINI_MODELS = ('gemini-3.5-flash', 'gemini-2.5-flash')
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
@@ -50,17 +55,25 @@ def build_gemini_prompt(articles_by_category):
     return "\n".join(prompt_parts)
 
 async def get_summary_from_gemini(api_key, prompt):
-    """Sends the prompt to the Gemini API and gets the summary."""
-    try:
-        genai.configure(api_key=api_key)
-        model = genai.GenerativeModel('gemini-2.5-flash')
-        logging.info("Sending request to Gemini API...")
-        response = await model.generate_content_async(prompt)
-        logging.info("Received response from Gemini API.")
-        return response.text
-    except Exception as e:
-        logging.error(f"Error calling Gemini API: {e}")
-        return f"Error: Failed to generate summary. {e}"
+    """Sends the prompt to the Gemini API, walking down GEMINI_MODELS until
+    one is available (404/NotFound on a model id triggers the next fallback)."""
+    genai.configure(api_key=api_key)
+    last_error = None
+    for model_name in GEMINI_MODELS:
+        try:
+            model = genai.GenerativeModel(model_name)
+            logging.info(f"Sending request to Gemini API ({model_name})...")
+            response = await model.generate_content_async(prompt)
+            logging.info(f"Received response from Gemini API ({model_name}).")
+            return response.text
+        except google_exceptions.NotFound as e:
+            logging.warning(f"Model '{model_name}' not found, trying next fallback...")
+            last_error = e
+        except Exception as e:
+            logging.error(f"Error calling Gemini API: {e}")
+            return f"Error: Failed to generate summary. {e}"
+    logging.error(f"No configured Gemini model is available: {last_error}")
+    return f"Error: Failed to generate summary. {last_error}"
 
 def sanitize_markdown_v2(text: str) -> str:
     """
