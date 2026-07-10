@@ -101,7 +101,7 @@ path = news_articles.db
 
 Environment variables take precedence over `config.ini`.
 
-## Honest limitations
+## Limitations
 
 - **Delivery requires secrets.** Without a Gemini API key and a Telegram bot
   token/chat id, only the gather stage works; the summarize/send stage exits
