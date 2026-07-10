@@ -2,7 +2,8 @@
 
 A hands-off daily news briefing: a GitHub Actions cron job fetches a curated
 set of tech/AI RSS feeds every morning, deduplicates the articles in SQLite,
-asks Gemini to write a structured summary, and delivers it to a Telegram chat.
+pulls the text of each new article, asks Gemini to write a structured summary
+grounded in that text, and delivers it to a Telegram chat.
 
 ## How it works
 
@@ -16,11 +17,22 @@ GitHub Actions (daily cron, 07:00 UTC)
 │     • parses entries with feedparser
 │     • inserts into SQLite (news_articles.db); the article URL is the
 │       PRIMARY KEY, so re-runs and cross-feed duplicates are dropped
+│     • fetches each newly stored article's page and extracts the main
+│       text (trafilatura first, then an httpx + BeautifulSoup fallback
+│       that takes <article>, <main>, or the densest paragraph cluster),
+│       storing up to ~3,000 chars per article in the body column;
+│       8 fetches run at a time with a 20s per-request timeout, and a
+│       failed fetch stores an empty body without aborting the run
 │
 └─ 2. summarize_and_send.py
       • loads all stored articles grouped by category
-      • builds a structured prompt and calls Gemini (gemini-3.5-flash,
-        falling back to gemini-2.5-flash if the model id is unavailable)
+      • builds a structured prompt grounded in the fetched article text
+        (title + body); articles with no extracted body explicitly fall
+        back to title + feed summary
+      • caps the total prompt at ~100k chars, truncating each article's
+        text evenly if the day's haul would exceed it
+      • calls Gemini (gemini-3.5-flash, falling back to gemini-2.5-flash
+        if the model id is unavailable)
       • sanitizes the result for Telegram MarkdownV2 (with 4096-char
         message splitting)
       • sends the briefing via the Telegram Bot API
@@ -34,7 +46,7 @@ Feeds and secrets are deliberately kept apart:
 
 | File / source | Committed? | Contains |
 |---|---|---|
-| `feeds.ini` | yes | RSS feed list only — no secrets |
+| `feeds.ini` | yes | RSS feed list only, no secrets |
 | GitHub Actions secrets | n/a | `GEMINI_API_KEY`, `TELEGRAM_TOKEN`, `TELEGRAM_CHAT_ID` |
 | `config.ini` (optional, gitignored) | no | local overrides: secrets and/or extra feeds for development |
 
@@ -67,7 +79,7 @@ MIT Technology Review AI, Google AI Blog, VentureBeat AI, Simon Willison).
 5. Adjust `feeds.ini` and the cron schedule in
    `.github/workflows/daily_briefing.yml` to taste.
 
-That's it — the workflow also has a `workflow_dispatch` trigger so you can
+That's it: the workflow also has a `workflow_dispatch` trigger so you can
 fire a test run from the Actions tab.
 
 ### Running locally
@@ -77,7 +89,7 @@ python -m venv venv
 venv/Scripts/activate        # Windows (or: source venv/bin/activate)
 pip install -r requirements.txt
 
-# Stage 1 needs no secrets — it just fills news_articles.db:
+# Stage 1 needs no secrets; it fetches feeds and article bodies into news_articles.db:
 python gather_news.py
 
 # Stage 2 needs the secrets, via env vars…
@@ -106,13 +118,14 @@ Environment variables take precedence over `config.ini`.
 - **Delivery requires secrets.** Without a Gemini API key and a Telegram bot
   token/chat id, only the gather stage works; the summarize/send stage exits
   with a clear error. There is no keyless demo mode.
-- Summary quality is whatever Gemini produces from feed titles/summaries
-  (article bodies are not scraped); the prompt enforces structure, not facts.
+- Summaries are grounded in fetched article text, but extraction is best
+  effort: paywalled or bot-blocking pages gracefully fall back to the feed
+  title/summary, and the prompt enforces structure, not facts.
 - Uses the deprecated-but-functional `google-generativeai` SDK; a future
   cleanup would migrate to `google-genai`.
 
 ## Stack
 
-Python 3.11 · httpx + asyncio · feedparser · SQLite · google-generativeai
-(gemini-3.5-flash → gemini-2.5-flash fallback) · python-telegram-bot ·
-GitHub Actions cron
+Python 3.11 · httpx + asyncio · feedparser · trafilatura + BeautifulSoup ·
+SQLite · google-generativeai (gemini-3.5-flash → gemini-2.5-flash fallback) ·
+python-telegram-bot · GitHub Actions cron

@@ -13,30 +13,66 @@ from datetime import datetime
 # model id is not available (yet/anymore) for this API key.
 GEMINI_MODELS = ('gemini-3.5-flash', 'gemini-2.5-flash')
 
+# Keep the assembled prompt under a sane total size. If the articles would
+# blow past this, each article's text is truncated to an equal share so no
+# single long article crowds out the rest.
+PROMPT_CHAR_BUDGET = 100_000
+
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
 def get_articles_from_db(db_path):
-    """Fetches all articles from the database and groups them by category."""
+    """Fetches all articles from the database and groups them by category.
+    Each article is (title, text, grounded): text is the fetched article body
+    when gather_news.py extracted one, otherwise the feed-provided summary."""
     conn = sqlite3.connect(db_path)
     conn.row_factory = sqlite3.Row
     cursor = conn.cursor()
-    cursor.execute("SELECT title, content, category, url FROM articles ORDER BY category, published DESC")
-    
+    try:
+        cursor.execute("SELECT title, content, body, category, url FROM articles ORDER BY category, published DESC")
+        rows = cursor.fetchall()
+        has_body = True
+    except sqlite3.OperationalError:
+        # Database predates the body column: fall back to feed summaries only.
+        cursor.execute("SELECT title, content, category, url FROM articles ORDER BY category, published DESC")
+        rows = cursor.fetchall()
+        has_body = False
+
     articles_by_category = {}
-    for row in cursor.fetchall():
+    grounded_count = 0
+    fallback_count = 0
+    for row in rows:
         category = row['category']
         if category not in articles_by_category:
             articles_by_category[category] = []
-        # Limit content length to avoid overly long prompts
-        articles_by_category[category].append(f"Title: {row['title']}\nSummary: {row['content'][:500]}")
-        
+        body = (row['body'] if has_body else '') or ''
+        body = body.strip()
+        if body:
+            # Grounded in the fetched article text (already capped by gather).
+            articles_by_category[category].append((row['title'], body, True))
+            grounded_count += 1
+        else:
+            # Explicit fallback: no body was extracted, use the feed summary.
+            articles_by_category[category].append((row['title'], (row['content'] or '')[:500], False))
+            fallback_count += 1
+
     conn.close()
+    logging.info(f"Loaded {grounded_count + fallback_count} articles: "
+                 f"{grounded_count} with fetched bodies, {fallback_count} on feed-summary fallback.")
     return articles_by_category
+
+def _format_article(title, text, grounded, text_cap=None):
+    """One article block for the prompt. Grounded articles are labeled as full
+    text so the model knows what it is looking at."""
+    if text_cap is not None:
+        text = text[:text_cap]
+    label = "Article text" if grounded else "Feed summary"
+    return f"Title: {title}\n{label}: {text}"
 
 def build_gemini_prompt(articles_by_category):
     """Creates a structured prompt for the AI to get a clean summary."""
-    prompt_parts = [
+    instructions = [
         "You are a world news editor. Your task is to create a concise, neutral, and informative daily news briefing from the following articles, which are grouped by category.",
+        "Each article comes with its full text when available, or a short feed summary otherwise.",
         "Your response MUST strictly follow this format:",
         "1. Start with a single-sentence overall summary of the day's most important news.",
         "2. For each category, write '## Category Name'.",
@@ -46,13 +82,30 @@ def build_gemini_prompt(articles_by_category):
         "\n--- ARTICLES START ---\n"
     ]
 
-    for category, articles in articles_by_category.items():
-        prompt_parts.append(f"CATEGORY: {category}\n")
-        prompt_parts.extend(articles)
-        prompt_parts.append("\n")
+    def assemble(text_cap=None):
+        prompt_parts = list(instructions)
+        for category, articles in articles_by_category.items():
+            prompt_parts.append(f"CATEGORY: {category}\n")
+            for title, text, grounded in articles:
+                prompt_parts.append(_format_article(title, text, grounded, text_cap))
+            prompt_parts.append("\n")
+        prompt_parts.append("--- ARTICLES END ---")
+        return "\n".join(prompt_parts)
 
-    prompt_parts.append("--- ARTICLES END ---")
-    return "\n".join(prompt_parts)
+    prompt = assemble()
+    if len(prompt) <= PROMPT_CHAR_BUDGET:
+        return prompt
+
+    # Over budget: give every article's text an equal share of what remains
+    # after the fixed scaffolding and titles.
+    total_articles = sum(len(articles) for articles in articles_by_category.values())
+    total_text_chars = sum(len(text) for articles in articles_by_category.values()
+                           for _, text, _ in articles)
+    scaffold_chars = len(prompt) - total_text_chars
+    per_article_cap = max((PROMPT_CHAR_BUDGET - scaffold_chars) // max(total_articles, 1), 200)
+    logging.warning(f"Prompt would be {len(prompt)} chars (budget {PROMPT_CHAR_BUDGET}); "
+                    f"truncating each article's text to {per_article_cap} chars.")
+    return assemble(text_cap=per_article_cap)
 
 async def get_summary_from_gemini(api_key, prompt):
     """Sends the prompt to the Gemini API, walking down GEMINI_MODELS until
