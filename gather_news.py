@@ -85,7 +85,11 @@ def store_articles_in_db(db_path: str, all_articles: List[Dict]):
 async def main():
     logging.info("--- Starting V3 Concurrent News Gatherer (with redirects) ---")
     config = configparser.ConfigParser()
-    config.read('config.ini')
+    # feeds.ini is the committed, secret-free feed list. A local, gitignored
+    # config.ini is still read afterwards (backward compatible) and can
+    # override or extend it.
+    loaded = config.read(['feeds.ini', 'config.ini'])
+    logging.info(f"Loaded configuration from: {loaded or 'nothing (no config files found!)'}")
 
     db_path = config.get('database', 'path', fallback='news_articles.db')
     setup_database(db_path)
@@ -96,6 +100,10 @@ async def main():
             category = section.replace('feeds_', '', 1).replace('_', ' ').title()
             for name, url in config.items(section):
                 feeds_to_fetch.append((category, name, url))
+
+    if not feeds_to_fetch:
+        logging.error("No [feeds_*] sections found in feeds.ini/config.ini. Nothing to fetch.")
+        raise SystemExit(1)
 
     async with httpx.AsyncClient() as session:
         tasks = [fetch_feed(session, cat, name, url) for cat, name, url in feeds_to_fetch]

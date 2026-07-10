@@ -53,7 +53,7 @@ async def get_summary_from_gemini(api_key, prompt):
     """Sends the prompt to the Gemini API and gets the summary."""
     try:
         genai.configure(api_key=api_key)
-        model = genai.GenerativeModel('gemini-1.5-flash-latest')
+        model = genai.GenerativeModel('gemini-2.5-flash')
         logging.info("Sending request to Gemini API...")
         response = await model.generate_content_async(prompt)
         logging.info("Received response from Gemini API.")
@@ -130,19 +130,24 @@ def clear_database(db_path):
     logging.info(f"Successfully cleared database '{db_path}'.")
 
 async def main():
-    # In GitHub Actions, we'll get secrets from the environment
-    if 'GITHUB_ACTIONS' in os.environ:
-        telegram_token = os.environ['TELEGRAM_TOKEN']
-        chat_id = os.environ['TELEGRAM_CHAT_ID']
-        gemini_key = os.environ['GEMINI_API_KEY']
-        db_path = 'news_articles.db'
-    else: # For local testing, use the config file
-        config = configparser.ConfigParser()
-        config.read('config.ini')
-        telegram_token = config.get('telegram', 'token')
-        chat_id = config.get('telegram', 'chat_id')
-        gemini_key = config.get('gemini', 'api_key')
-        db_path = config.get('database', 'path')
+    # Secrets come from environment variables first (GitHub Actions secrets in
+    # CI). A local, gitignored config.ini is still supported as a fallback.
+    config = configparser.ConfigParser()
+    config.read('config.ini')
+    telegram_token = os.environ.get('TELEGRAM_TOKEN') or config.get('telegram', 'token', fallback=None)
+    chat_id = os.environ.get('TELEGRAM_CHAT_ID') or config.get('telegram', 'chat_id', fallback=None)
+    gemini_key = os.environ.get('GEMINI_API_KEY') or config.get('gemini', 'api_key', fallback=None)
+    db_path = config.get('database', 'path', fallback='news_articles.db')
+
+    missing = [name for name, value in [
+        ('TELEGRAM_TOKEN', telegram_token),
+        ('TELEGRAM_CHAT_ID', chat_id),
+        ('GEMINI_API_KEY', gemini_key),
+    ] if not value]
+    if missing:
+        logging.error(f"Missing secrets: {', '.join(missing)}. "
+                      "Set them as environment variables or in a local config.ini.")
+        raise SystemExit(1)
 
     articles = get_articles_from_db(db_path)
     if not articles:

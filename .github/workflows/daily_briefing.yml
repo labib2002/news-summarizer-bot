@@ -21,12 +21,13 @@ jobs:
       - name: Install dependencies
         run: pip install -r requirements.txt
 
+      # Reads the feed list from the committed feeds.ini (no secrets needed).
       - name: Step 1 - Gather News Articles
         run: python gather_news.py
 
+      # Secrets come from repository Actions secrets, never from the repo.
       - name: Step 2 - Summarize and Send Briefing
         env:
-          GITHUB_ACTIONS: 'true'
           TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
